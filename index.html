@@ -434,6 +434,11 @@
   const STORAGE_KEY = "dashverse_promo_reel_data_v2";
   const COMMENTS_KEY = "dashverse_promo_reel_comments_v2";
   const BACKEND_KEY = "dashverse_promo_reel_backend_url";
+  const DISCONNECT_KEY = "dashverse_promo_reel_disconnected";
+  // Baked-in so the page is "live" for anyone who opens the file — not just the
+  // browser that originally connected it. A per-browser Team Sync connection
+  // (saved to BACKEND_KEY) always overrides this if present.
+  const DEFAULT_BACKEND_URL = "https://script.google.com/macros/s/AKfycbyYSqpCBoLk4wmD0EWyB2cMgDBesTgj67Ch5QxT06CXA50cHvuwnxcOETvE-MSHNUEf/exec";
 
   const STATUSES = ["In-Progress","In-Review","Completed","Live"];
   const STATUS_META = {
@@ -445,7 +450,12 @@
 
   let promos = [];
   let comments = [];
-  let backendUrl = (localStorage.getItem(BACKEND_KEY) || "").trim();
+  let backendUrl = (
+    localStorage.getItem(BACKEND_KEY) ||
+    (localStorage.getItem(DISCONNECT_KEY) === '1' ? '' : DEFAULT_BACKEND_URL) ||
+    ""
+  ).trim();
+  let lastSyncFailed = false;
   let searchTerm = "";
   let activeFilter = "all";
   let openPromoId = null;
@@ -489,9 +499,11 @@
       comments = data.comments || [];
       save();
       setSyncStatus('synced','Synced with Sheet');
+      lastSyncFailed = false;
       return true;
     }catch(err){
       setSyncStatus('error','Sync error');
+      lastSyncFailed = true;
       if(!silent) showToast("Couldn't reach the team sheet");
       return false;
     }
@@ -606,6 +618,16 @@
 
     const grid = $('#promoGrid');
     if(list.length === 0){
+      if(backendUrl && lastSyncFailed && promos.length === 0){
+        grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1; border-color:var(--danger-soft);">
+          <svg viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="1.5"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>
+          <h3 style="color:var(--danger);">Can't reach the team sheet</h3>
+          <p>The board is empty because the last sync failed — not because there's no data. Open <strong>Team sync</strong> and hit <strong>Test connection</strong> to see the exact error.</p>
+          <button class="btn" id="emptyRetrySync">Retry sync</button>
+        </div>`;
+        const r = $('#emptyRetrySync'); if(r) r.addEventListener('click', async ()=>{ const ok = await fetchFromBackend(); renderAll(); });
+        return;
+      }
       grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1;">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 9h18M8 5v4"/></svg>
         <h3>No promos here</h3>
@@ -924,13 +946,15 @@
       $('#syncTestResult').className = 'sync-test-result';
     }
     backendUrl = url;
-    localStorage.setItem(BACKEND_KEY, backendUrl);
     if(backendUrl){
+      localStorage.setItem(BACKEND_KEY, backendUrl);
+      localStorage.removeItem(DISCONNECT_KEY);
       showToast('Connected — pulling the team sheet…');
       const ok = await fetchFromBackend();
       renderAll();
       if(ok) closeSyncModal();
     } else {
+      localStorage.removeItem(BACKEND_KEY);
       setSyncStatus(null, 'Local only');
       showToast('Disconnected from team sheet');
       closeSyncModal();
@@ -958,6 +982,7 @@
   $('#btnDisconnectSync').addEventListener('click', ()=>{
     backendUrl = '';
     localStorage.removeItem(BACKEND_KEY);
+    localStorage.setItem(DISCONNECT_KEY, '1');
     setSyncStatus(null, 'Local only');
     showToast('Disconnected — changes now stay on this device only');
     closeSyncModal();
